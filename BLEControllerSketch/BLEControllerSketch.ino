@@ -22,24 +22,23 @@
 #define PIN_CAPABILITY_SERVO     0x08
 #define PIN_CAPABILITY_I2C       0x10
 
-// pin modes
-//#define INPUT                 0x00 // defined in wiring.h
-//#define OUTPUT                0x01 // defined in wiring.h
-#define ANALOG                  0x02 // analog pin in analogInput mode
-#define PWM                     0x03 // digital pin in PWM output mode
-#define SERVO                   0x04 // digital pin in Servo output mode
+// modos de pin y asignacion de direcciones
 
-byte pin_mode[TOTAL_PINS];
-byte pin_state[TOTAL_PINS];
+#define ANALOG                  0x02 // pin analogico en modo analogInput
+#define PWM                     0x03 //  pin digital en modo de salida PWM 
+#define SERVO                   0x04 // pin digital en modo de salida Servo
+
+byte modosPin[TOTAL_PINS];
+byte estadosPin[TOTAL_PINS];
 byte pin_pwm[TOTAL_PINS];
 byte pin_servo[TOTAL_PINS];
 
 Servo servos[MAX_SERVOS];
 
-/* timer variables */
-unsigned long currentMillis;        // store the current value from millis()
-unsigned long previousMillis;       // for comparison with currentMillis
-int samplingInterval = 5;          // how often to run the main loop (in ms)
+/* variables del temporizador */
+unsigned long valorActualMilisegundos;        // almacena el valor actual de millis ()
+unsigned long compararMilisegundos;       // para comparacion con  valorActualMilisegundos
+int frecuenciaEjecucion = 5;          // la frecuencia para ejecutar el bucle principal (en ms)
 
 void setup()
 {
@@ -47,27 +46,28 @@ void setup()
   
   #if !defined(__AVR_ATmega328P__)
   Serial.begin(57600);
-  //while(!Serial);  // Enable this line if you want to debug on Leonardo
+  //while(!Serial);  // Habilitar esta línea si desea depurar en Le
   Serial.println("BLE Arduino Slave ");
   #endif
 
-  /* Default all to digital input */
+  /* Por defecto todos a la entrada digital */
   for (int pin = 0; pin < TOTAL_PINS; pin++)
   {
-    // Set pin to input with internal pull up
+    // Establecer pin para entrada con  INPUT_PULLUP (Entidendo que es como la inversa si esta en HIGH  que se apague un led por ejemplo, si es low que se encienda)
     if(IS_PIN_DIGITAL(pin))
     {
       pinMode(pin, INPUT);
     }      
     digitalWrite(pin, HIGH);
-    // Save pin mode and state
-    pin_mode[pin] = INPUT;
-    pin_state[pin] = LOW;
+    //  guarda el modo del pin y su estado
+    modosPin[pin] = INPUT;
+    estadosPin[pin] = LOW;
   } 
 }
 
 static byte buf_len = 0;
 
+//Entrada de informe digital
 byte reportDigitalInput()
 {
   static byte pin = 0;
@@ -81,15 +81,15 @@ byte reportDigitalInput()
     return 0;
   }
   
-  if (pin_mode[pin] == INPUT)
+  if (modosPin[pin] == INPUT)
   {
-      byte current_state = digitalRead(pin);
+      byte estadoActual = digitalRead(pin);
             
-      if (pin_state[pin] != current_state)
+      if (estadosPin[pin] != estadoActual)
       {
-        pin_state[pin] = current_state;
-        byte buf[] = {'G', pin, INPUT, current_state};
-        BLEMini_write_bytes(buf, 4);
+        estadosPin[pin] = estadoActual;
+        byte buf[] = {'G', pin, INPUT, estadoActual};
+        enviarArregloDatos(buf, 4);
         
         report = 1;
       }
@@ -102,6 +102,7 @@ byte reportDigitalInput()
   return report;
 }
 
+//Reportar capacidad de pin
 void reportPinCapability(byte pin)
 {
   byte buf[] = {'P', pin, 0x00};
@@ -120,19 +121,16 @@ void reportPinCapability(byte pin)
     pin_cap |= PIN_CAPABILITY_SERVO;
 
   buf[2] = pin_cap;
-  BLEMini_write_bytes(buf, 3);
+  enviarArregloDatos(buf, 3);
 }
 
 void reportPinServoData(byte pin)
 {
-//  if (IS_PIN_SERVO(pin))
-//    servos[PIN_TO_SERVO(pin)].write(value);
-//  pin_servo[pin] = value;
-  
+
   byte value = pin_servo[pin];
-  byte mode = pin_mode[pin];
+  byte mode = modosPin[pin];
   byte buf[] = {'G', pin, mode, value};         
-  BLEMini_write_bytes(buf, 4);
+  enviarArregloDatos(buf, 4);
 }
 
 byte reportPinAnalogData()
@@ -148,17 +146,17 @@ byte reportPinAnalogData()
     return 0;
   }
   
-  if (pin_mode[pin] == ANALOG)
+  if (modosPin[pin] == ANALOG)
   {
     uint16_t value = analogRead(pin);
     byte value_lo = value;
     byte value_hi = value>>8;
     
-    byte mode = pin_mode[pin];
+    byte mode = modosPin[pin];
     mode = (value_hi << 4) | mode;
   
     byte buf[] = {'G', pin, mode, value};         
-    BLEMini_write_bytes(buf, 4);
+    enviarArregloDatos(buf, 4);
   }
   
   pin++;
@@ -171,92 +169,95 @@ byte reportPinAnalogData()
 void reportPinDigitalData(byte pin)
 {
   byte state = digitalRead(pin);
-  byte mode = pin_mode[pin];
+  byte mode = modosPin[pin];
   byte buf[] = {'G', pin, mode, state};         
-  BLEMini_write_bytes(buf, 4);
+  enviarArregloDatos(buf, 4);
 }
 
 void reportPinPWMData(byte pin)
 {
   byte value = pin_pwm[pin];
-  byte mode = pin_mode[pin];
+  byte mode = modosPin[pin];
   byte buf[] = {'G', pin, mode, value};         
-  BLEMini_write_bytes(buf, 4);
+  enviarArregloDatos(buf, 4);
 }
 
 void sendCustomData(uint8_t *buf, uint8_t len)
 {
   uint8_t data[20] = "Z";
   memcpy(&data[1], buf, len);
-  BLEMini_write_bytes(data, len+1);
+  enviarArregloDatos(data, len+1);
 }
 
 byte queryDone = false;
 
+
+//INICIA LOOP
+
 void loop()
 {
-  while(BLEMini_available())
+  while(recibiendo())
   {
     byte cmd;
-    cmd = BLEMini_read();
+    cmd = leerDato();
 
 #if !defined(__AVR_ATmega328P__) // don't print out on UNO
     Serial.write(cmd);
 #endif
 
-    // Parse data here
+    // Analizar los datos aqui
     switch (cmd)
     {
-      case 'V': // query protocol version
+      case 'V': // versión del protocolo de consulta
         {
           queryDone = false;
           
           byte buf[] = {'V', 0x00, 0x00, 0x01};
-          BLEMini_write_bytes(buf, 4);          
+          enviarArregloDatos(buf, 4);          
         }
         break;
       
-      case 'C': // query board total pin count
+      case 'C': // recuento total de pines
         {
           byte buf[2];
           buf[0] = 'C';
           buf[1] = TOTAL_PINS; 
-          BLEMini_write_bytes(buf, 2);
+          enviarArregloDatos(buf, 2);
         }        
         break;
       
-      case 'M': // query pin mode
+      case 'M': // consulta el modo del pin 
         {  
-          byte pin = BLEMini_read();
-          byte buf[] = {'M', pin, pin_mode[pin]}; // report pin mode
-          BLEMini_write_bytes(buf, 3);
+          byte pin = leerDato();
+          byte buf[] = {'M', pin, modosPin[pin]}; // reportar modo del pin
+          enviarArregloDatos(buf, 3);
         }  
         break;
       
-      case 'S': // set pin mode
+      case 'S': // establece modo del pin
         {
-          byte pin = BLEMini_read();
-          byte mode = BLEMini_read();
+          byte pin = leerDato();
+          byte mode = leerDato();
           
-          if (IS_PIN_SERVO(pin) && mode != SERVO && servos[PIN_TO_SERVO(pin)].attached())
-            servos[PIN_TO_SERVO(pin)].detach();
+          if (IS_PIN_SERVO(pin) && mode != SERVO && servos[PIN_TO_SERVO(pin)].attached())//attach true si el servo está conectado al pin; false en caso contrario.
+            servos[PIN_TO_SERVO(pin)].detach(); //Separar la variable Servo de su pin
   
-          /* ToDo: check the mode is in its capability or not */
-          /* assume always ok */
-          if (mode != pin_mode[pin])
+          /* ToDo: Comprobar el modo si esta en su capacidad o no  */
+          /* asumir siempre OK*/
+          if (mode != modosPin[pin])
           {              
             pinMode(pin, mode);
-            pin_mode[pin] = mode;
+            modosPin[pin] = mode;
           
             if (mode == OUTPUT)
             {
               digitalWrite(pin, LOW);
-              pin_state[pin] = LOW;
+              estadosPin[pin] = LOW;
             }
             else if (mode == INPUT)
             {
               digitalWrite(pin, HIGH);
-              pin_state[pin] = HIGH;
+              estadosPin[pin] = HIGH;
             }
             else if (mode == ANALOG)
             {
@@ -273,7 +274,7 @@ void loop()
                 pinMode(PIN_TO_PWM(pin), OUTPUT);
                 analogWrite(PIN_TO_PWM(pin), 0);
                 pin_pwm[pin] = 0;
-                pin_mode[pin] = PWM;
+                modosPin[pin] = PWM;
               }
             }
             else if (mode == SERVO)
@@ -281,7 +282,7 @@ void loop()
               if (IS_PIN_SERVO(pin))
               {
                 pin_servo[pin] = 0;
-                pin_mode[pin] = SERVO;
+                modosPin[pin] = SERVO;
                 if (!servos[PIN_TO_SERVO(pin)].attached())
                   servos[PIN_TO_SERVO(pin)].attach(PIN_TO_DIGITAL(pin));
               }
@@ -301,15 +302,15 @@ void loop()
 
       case 'G': // query pin data
         {
-          byte pin = BLEMini_read();
+          byte pin = leerDato();
           reportPinDigitalData(pin);
         }
         break;
         
       case 'T': // set pin digital state
         {
-          byte pin = BLEMini_read();
-          byte state = BLEMini_read();
+          byte pin = leerDato();
+          byte state = leerDato();
           
           digitalWrite(pin, state);
           reportPinDigitalData(pin);
@@ -318,8 +319,8 @@ void loop()
       
       case 'N': // set PWM
         {
-          byte pin = BLEMini_read();
-          byte value = BLEMini_read();
+          byte pin = leerDato();
+          byte value = leerDato();
           
           analogWrite(PIN_TO_PWM(pin), value);
           pin_pwm[pin] = value;
@@ -329,8 +330,8 @@ void loop()
       
       case 'O': // set Servo
         {
-          byte pin = BLEMini_read();
-          byte value = BLEMini_read();
+          byte pin = leerDato();
+          byte value = leerDato();
 
           if (IS_PIN_SERVO(pin))
             servos[PIN_TO_SERVO(pin)].write(value);
@@ -343,11 +344,11 @@ void loop()
         for (int pin = 0; pin < TOTAL_PINS; pin++)
         {
           reportPinCapability(pin);
-          if ( (pin_mode[pin] == INPUT) || (pin_mode[pin] == OUTPUT) )
+          if ( (modosPin[pin] == INPUT) || (modosPin[pin] == OUTPUT) )
             reportPinDigitalData(pin);
-          else if (pin_mode[pin] == PWM)
+          else if (modosPin[pin] == PWM)
             reportPinPWMData(pin);
-          else if (pin_mode[pin] == SERVO)
+          else if (modosPin[pin] == SERVO)
             reportPinServoData(pin);  
         }
         
@@ -362,17 +363,17 @@ void loop()
           
       case 'P': // query pin capability
         {
-          byte pin = BLEMini_read();
+          byte pin = leerDato();
           reportPinCapability(pin);
         }
         break;
         
       case 'Z':
         {
-          byte len = BLEMini_read();
+          byte len = leerDato();
           byte buf[len];
           for (int i=0;i<len;i++)
-            buf[i] = BLEMini_read();
+            buf[i] = leerDato();
 
 #if !defined(__AVR_ATmega328P__)  
           Serial.println("->");
@@ -383,23 +384,21 @@ void loop()
         }
     }
     
-    return; // only do this task in this loop
+    return; // sólo hacer esta tarea en este bucle
   }
 
-  // No input data, no commands, process analog data
-//  if (!ble_connected())
-//    queryDone = false; // reset query state
+
     
-  if (queryDone) // only report data after the query state
+  if (queryDone) // sólo informar los datos después de que el estado de consulta
   { 
     byte input_data_pending = reportDigitalInput();  
     if (input_data_pending)  
-      return; // only do this task in this loop
+      return; // sólo hacer esta tarea en
 
-    currentMillis = millis();
-    if (currentMillis - previousMillis > samplingInterval)
+    valorActualMilisegundos = millis();
+    if (valorActualMilisegundos - compararMilisegundos > frecuenciaEjecucion)
     {
-      previousMillis += samplingInterval;
+      compararMilisegundos += frecuenciaEjecucion;
   
       reportPinAnalogData();
     }

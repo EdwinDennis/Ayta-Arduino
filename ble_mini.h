@@ -4,9 +4,9 @@
 #include <Arduino.h>
 
 void BLEMini_begin(unsigned long bound);
-int BLEMini_available();
-void BLEMini_write(unsigned char dat);
-void BLEMini_write_bytes(unsigned char *dat, unsigned char len);
-int BLEMini_read();
+int recibiendo();
+void enviarDato(unsigned char dat);
+void enviarArregloDatos(unsigned char *arreglo, unsigned char longitud);
+int leerDato();
 
 #endif
